@@ -13,7 +13,7 @@ const COMPETITION_SOLVES: usize = 100;
 const COMPETITION_SCRAMBLE_LEN: usize = 25;
 const COMPETITION_SEED: u64 = 0xFACEFEED;
 const COMPETITION_SOLVE_TIMEOUT_MS: u64 = 13_116;
-const PHASE1_EXTRA_OPTIMIZATION_DEPTH: usize = 1;
+const PHASE1_EXTRA_OPTIMIZATION_DEPTH: usize = 3;
 
 const EDGE_ORIENTATION_COUNT: usize = 2048;    // 2^11
 const CORNER_ORIENTATION_COUNT: usize = 2187;  // 3^7
@@ -177,6 +177,123 @@ impl CubeState {
         }
         self.ep = next_ep; self.eo = next_eo;
         self.cp = next_cp; self.co = next_co;
+    }
+
+    pub fn inverse(&self) -> Self {
+        let mut inv_ep = [0u8; 12];
+        let mut inv_eo = [0u8; 12];
+        for (i, &ep_val) in self.ep.iter().enumerate() {
+            inv_ep[ep_val as usize] = i as u8;
+        }
+        for (i, &val) in inv_ep.iter().enumerate() {
+            inv_eo[i] = self.eo[val as usize];
+        }
+        let mut inv_cp = [0u8; 8];
+        let mut inv_co = [0u8; 8];
+        for (i, &cp_val) in self.cp.iter().enumerate() {
+            inv_cp[cp_val as usize] = i as u8;
+        }
+        for (i, &val) in inv_cp.iter().enumerate() {
+            let co_val = self.co[val as usize];
+            inv_co[i] = (3 - co_val) % 3;
+        }
+        Self {
+            ep: inv_ep,
+            eo: inv_eo,
+            cp: inv_cp,
+            co: inv_co,
+        }
+    }
+
+    pub fn from_face_map<F>(map_face: F) -> Self
+    where
+        F: Fn(char) -> char,
+    {
+        let corner_facelets = [
+            ('U', 'R', 'F'), // URF (0)
+            ('U', 'F', 'L'), // UFL (1)
+            ('U', 'L', 'B'), // ULB (2)
+            ('U', 'B', 'R'), // UBR (3)
+            ('D', 'F', 'R'), // DFR (4)
+            ('D', 'L', 'F'), // DFL (5)
+            ('D', 'B', 'L'), // DBL (6)
+            ('D', 'R', 'B'), // DBR (7)
+        ];
+
+        let edge_facelets = [
+            ('U', 'F'), // UF (0)
+            ('U', 'R'), // UR (1)
+            ('U', 'B'), // UB (2)
+            ('U', 'L'), // UL (3)
+            ('D', 'F'), // DF (4)
+            ('D', 'R'), // DR (5)
+            ('D', 'B'), // DB (6)
+            ('D', 'L'), // DL (7)
+            ('F', 'R'), // FR (8)
+            ('F', 'L'), // FL (9)
+            ('B', 'R'), // BR (10)
+            ('B', 'L'), // BL (11)
+        ];
+
+        let mut cp = [0u8; 8];
+        let mut co = [0u8; 8];
+        let mut ep = [0u8; 12];
+        let mut eo = [0u8; 12];
+
+        // Map corners
+        for (i, &(c0, c1, c2)) in corner_facelets.iter().enumerate() {
+            let target_facelets = (map_face(c0), map_face(c1), map_face(c2));
+
+            // Find which corner matches target_facelets (permuted)
+            let mut found_idx = 0;
+            let mut found_ori = 0;
+            for (j, &(t0, t1, t2)) in corner_facelets.iter().enumerate() {
+                if (target_facelets.0 == t0 && target_facelets.1 == t1 && target_facelets.2 == t2)
+                    || (target_facelets.0 == t0 && target_facelets.1 == t2 && target_facelets.2 == t1)
+                    || (target_facelets.0 == t1 && target_facelets.1 == t0 && target_facelets.2 == t2)
+                    || (target_facelets.0 == t1 && target_facelets.1 == t2 && target_facelets.2 == t0)
+                    || (target_facelets.0 == t2 && target_facelets.1 == t0 && target_facelets.2 == t1)
+                    || (target_facelets.0 == t2 && target_facelets.1 == t1 && target_facelets.2 == t0)
+                {
+                    found_idx = j;
+                    // Determine orientation based on where U/D goes
+                    if target_facelets.0 == 'U' || target_facelets.0 == 'D' {
+                        found_ori = 0;
+                    } else if target_facelets.1 == 'U' || target_facelets.1 == 'D' {
+                        found_ori = 1;
+                    } else {
+                        found_ori = 2;
+                    }
+                    break;
+                }
+            }
+            cp[found_idx] = i as u8;
+            co[found_idx] = found_ori;
+        }
+
+        // Map edges
+        for (i, &(e0, e1)) in edge_facelets.iter().enumerate() {
+            let target_facelets = (map_face(e0), map_face(e1));
+
+            // Find which edge matches target_facelets (permuted)
+            let mut found_idx = 0;
+            let mut found_ori = 0;
+            for (j, &(t0, t1)) in edge_facelets.iter().enumerate() {
+                if target_facelets.0 == t0 && target_facelets.1 == t1 {
+                    found_idx = j;
+                    found_ori = 0;
+                    break;
+                } else if target_facelets.0 == t1 && target_facelets.1 == t0 {
+                    found_idx = j;
+                    found_ori = 1;
+                    break;
+                }
+            }
+            ep[found_idx] = i as u8;
+            eo[found_idx] = found_ori;
+        }
+
+        Self { ep, eo, cp, co }
     }
 
 
@@ -363,7 +480,126 @@ fn build_slice_ep_move_table() -> Vec<[u8; PHASE2_MOVE_COUNT]> {
     t
 }
 
+fn get_symmetry_rotations() -> [CubeState; 8] {
+    let mut syms = [CubeState::new(); 8];
+    let y_rot = CubeState::from_face_map(|c| match c {
+        'U' => 'U', 'D' => 'D', 'F' => 'L', 'L' => 'B', 'B' => 'R', 'R' => 'F',
+        _ => unreachable!(),
+    });
+    let x2_rot = CubeState::from_face_map(|c| match c {
+        'U' => 'D', 'D' => 'U', 'F' => 'F', 'B' => 'B', 'L' => 'R', 'R' => 'L',
+        _ => unreachable!(),
+    });
 
+    let mut current_y = CubeState::new();
+    for sym in syms.iter_mut().take(4) {
+        *sym = current_y;
+        current_y.apply_state(&y_rot);
+    }
+    for i in 0..4 {
+        let mut sym = x2_rot;
+        sym.apply_state(&syms[i]);
+        syms[4 + i] = sym;
+    }
+    syms
+}
+
+fn conjugate_move(m: Move, r_inv: &CubeState, r: &CubeState) -> Move {
+    let m_state = BASE_MOVES[move_face(m)];
+    let power = move_power(m);
+    let mut conj_base = *r_inv;
+    conj_base.apply_state(&m_state);
+    conj_base.apply_state(r);
+
+    let mut found_face = 0;
+    for (face, &base) in BASE_MOVES.iter().enumerate() {
+        if conj_base == base {
+            found_face = face;
+            break;
+        }
+    }
+    move_from_face_power(found_face, power)
+}
+
+fn build_sym_move_conj_table(syms: &[CubeState; 8]) -> Vec<[u8; 18]> {
+    let mut table = vec![[0u8; 18]; 8];
+    let syms_inv: Vec<CubeState> = syms.iter().map(|s| s.inverse()).collect();
+
+    for (sym, row) in table.iter_mut().enumerate() {
+        let r = &syms[sym];
+        let r_inv = &syms_inv[sym];
+        for (mi, &mv) in PHASE1_MOVES.iter().enumerate() {
+            let conj_mv = conjugate_move(mv, r_inv, r);
+            let conj_idx = PHASE1_MOVES.iter().position(|&x| x == conj_mv).unwrap();
+            row[mi] = conj_idx as u8;
+        }
+    }
+    table
+}
+
+fn build_eo_sym_table(syms: &[CubeState; 8]) -> Vec<[u16; 8]> {
+    let mut table = vec![[0u16; 8]; EDGE_ORIENTATION_COUNT];
+    let syms_inv: Vec<CubeState> = syms.iter().map(|s| s.inverse()).collect();
+
+    for (eo, row) in table.iter_mut().enumerate() {
+        let base = CubeState {
+            ep: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            eo: decode_eo_coord(eo),
+            cp: [0, 1, 2, 3, 4, 5, 6, 7],
+            co: [0; 8],
+        };
+        for (sym, val) in row.iter_mut().enumerate() {
+            let mut s = syms[sym];
+            s.apply_state(&base);
+            s.apply_state(&syms_inv[sym]);
+            *val = s.edge_orientation_coord() as u16;
+        }
+    }
+    table
+}
+
+fn build_co_sym_table(syms: &[CubeState; 8]) -> Vec<[u16; 8]> {
+    let mut table = vec![[0u16; 8]; CORNER_ORIENTATION_COUNT];
+    let syms_inv: Vec<CubeState> = syms.iter().map(|s| s.inverse()).collect();
+
+    for (co, row) in table.iter_mut().enumerate() {
+        let base = CubeState {
+            ep: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            eo: [0; 12],
+            cp: [0, 1, 2, 3, 4, 5, 6, 7],
+            co: decode_co_coord(co),
+        };
+        for (sym, val) in row.iter_mut().enumerate() {
+            let mut s = syms[sym];
+            s.apply_state(&base);
+            s.apply_state(&syms_inv[sym]);
+            *val = s.corner_orientation_coord() as u16;
+        }
+    }
+    table
+}
+
+fn build_slice_sym_table(syms: &[CubeState; 8]) -> Vec<[u16; 8]> {
+    let mut table = vec![[0u16; 8]; SLICE_COMBINATION_COUNT];
+    let syms_inv: Vec<CubeState> = syms.iter().map(|s| s.inverse()).collect();
+
+    for (slice, row) in table.iter_mut().enumerate() {
+        let is_slice = decode_slice_coord(slice);
+        let mut base = CubeState::new();
+        let (mut sv, mut uv) = (8u8, 0u8);
+        for (i, &slice_flag) in is_slice.iter().enumerate() {
+            if slice_flag { base.ep[i] = sv; sv += 1; }
+            else           { base.ep[i] = uv; uv += 1; }
+        }
+        for (sym, val) in row.iter_mut().enumerate() {
+            let mut s = syms[sym];
+            s.apply_state(&base);
+            s.apply_state(&syms_inv[sym]);
+            *val = s.slice_coord() as u16;
+        }
+    }
+    table
+}
 
 // ---------- 5. Solver ----------
 
@@ -382,7 +618,16 @@ pub struct DominoSolver {
     cp_move:       Vec<[u32; PHASE2_MOVE_COUNT]>,
     ud_edge_move:  Vec<[u32; PHASE2_MOVE_COUNT]>,
     slice_ep_move: Vec<[u8;  PHASE2_MOVE_COUNT]>,
+
+    // Symmetry tables
+    syms: [CubeState; 8],
+    syms_inv: [CubeState; 8],
+    eo_sym: Vec<[u16; 8]>,
+    co_sym: Vec<[u16; 8]>,
+    slice_sym: Vec<[u16; 8]>,
+    sym_move_conj: Vec<[u8; 18]>,
 }
+
 
 #[derive(Debug, Default)]
 pub struct TableStats { entries: usize, generated_states: usize, elapsed: Duration }
@@ -420,6 +665,12 @@ impl DominoSolver {
             cp_move:       vec![[0u32; PHASE2_MOVE_COUNT]; CORNER_PERMUTATION_COUNT],
             ud_edge_move:  vec![[0u32; PHASE2_MOVE_COUNT]; UD_EDGE_PERMUTATION_COUNT],
             slice_ep_move: vec![[0u8;  PHASE2_MOVE_COUNT]; SLICE_EDGE_PERMUTATION_COUNT],
+            syms: [CubeState::new(); 8],
+            syms_inv: [CubeState::new(); 8],
+            eo_sym: Vec::new(),
+            co_sym: Vec::new(),
+            slice_sym: Vec::new(),
+            sym_move_conj: Vec::new(),
         };
 
         if solver.try_load_tables_from_disk() {
@@ -455,6 +706,19 @@ impl DominoSolver {
                 Err(e) => eprintln!("Warning: failed to save tables: {e}"),
             }
         }
+
+        let syms = get_symmetry_rotations();
+        let syms_inv = [
+            syms[0].inverse(), syms[1].inverse(), syms[2].inverse(), syms[3].inverse(),
+            syms[4].inverse(), syms[5].inverse(), syms[6].inverse(), syms[7].inverse(),
+        ];
+        solver.eo_sym = build_eo_sym_table(&syms);
+        solver.co_sym = build_co_sym_table(&syms);
+        solver.slice_sym = build_slice_sym_table(&syms);
+        solver.sym_move_conj = build_sym_move_conj_table(&syms);
+        solver.syms = syms;
+        solver.syms_inv = syms_inv;
+
         solver
     }
 
@@ -585,7 +849,7 @@ impl DominoSolver {
         for depth in 0..=max_p1 {
             if depth > deepest_p1 || depth >= best_len { break; }
 
-            let mut p1_sols: Vec<Vec<usize>> = Vec::new();
+            let mut p1_sols: Vec<(Vec<usize>, u8)> = Vec::new();
             self.search_phase1(
                 init_eo, init_co, init_slice, depth, 0,
                 &mut Vec::new(), &mut p1_sols, &mut stats, t0, limit,
@@ -599,21 +863,44 @@ impl DominoSolver {
             }
             stats.phase1_solutions += p1_sols.len();
 
-            for p1_idx in p1_sols {
-                if stats.timed_out { break; }
-
-                // Reconstruct domino CubeState to extract Phase-2 coords.
+            let mut candidates = Vec::with_capacity(p1_sols.len());
+            for (p1_idx, sym) in p1_sols {
                 let p1_moves: Vec<Move> = p1_idx.iter().map(|&i| PHASE1_MOVES[i]).collect();
                 let domino = start.apply_moves(&p1_moves);
-                let init_cp  = domino.corner_permutation_coord() as u32;
-                let init_ud  = domino.ud_edge_permutation_coord() as u32;
-                let init_sep = domino.slice_edge_permutation_coord() as u8;
+
+                let sym_state = &self.syms[sym as usize];
+                let sym_inv = &self.syms_inv[sym as usize];
+                let mut domino_rot = *sym_state;
+                domino_rot.apply_state(&domino);
+                domino_rot.apply_state(sym_inv);
+
+                let init_cp  = domino_rot.corner_permutation_coord() as u32;
+                let init_ud  = domino_rot.ud_edge_permutation_coord() as u32;
+                let init_sep = domino_rot.slice_edge_permutation_coord() as u8;
+
+                let h2 = self.phase2_heuristic(init_cp, init_ud, init_sep);
+                let est = p1_moves.len() + h2;
+                candidates.push((p1_moves, sym, init_cp, init_ud, init_sep, est));
+            }
+
+            // Sort candidates by total estimate ascending
+            candidates.sort_unstable_by_key(|c| c.5);
+
+            for (p1_moves, sym, init_cp, init_ud, init_sep, est) in candidates {
+                if stats.timed_out { break; }
+                if est >= best_len { continue; }
 
                 let max_p2_here = max_p2.min(best_len.saturating_sub(p1_moves.len() + 1));
                 if let Some(p2_idx) = self.search_phase2(
                     init_cp, init_ud, init_sep, max_p2_here, &mut stats, t0, limit,
                 ) {
-                    let p2_moves: Vec<Move> = p2_idx.iter().map(|&i| PHASE2_MOVES[i]).collect();
+                    let p2_moves: Vec<Move> = p2_idx.iter().map(|&i| {
+                        let p2_move = PHASE2_MOVES[i];
+                        let p1_idx = PHASE1_MOVES.iter().position(|&x| x == p2_move).unwrap();
+                        let conj_idx = self.sym_move_conj[sym as usize][p1_idx] as usize;
+                        PHASE1_MOVES[conj_idx]
+                    }).collect();
+
                     let mut full = p1_moves.clone();
                     full.extend(p2_moves);
                     full = normalize_moves(&full);
@@ -633,14 +920,22 @@ impl DominoSolver {
     fn search_phase1(
         &self, eo: u16, co: u16, slice: u16,
         max_d: usize, d: usize,
-        path: &mut Vec<usize>, sols: &mut Vec<Vec<usize>>,
+        path: &mut Vec<usize>, sols: &mut Vec<(Vec<usize>, u8)>,
         stats: &mut SolveStats, t0: Instant, limit: Option<Duration>,
     ) {
         stats.phase1_nodes += 1;
         if should_stop_search(stats, t0, limit) { return; }
 
         if d == max_d {
-            if eo == 0 && co == 0 && slice == SOLVED_SLICE_COORD { sols.push(path.clone()); }
+            for sym in 0..8 {
+                if self.eo_sym[eo as usize][sym] == 0
+                    && self.co_sym[co as usize][sym] == 0
+                    && self.slice_sym[slice as usize][sym] == SOLVED_SLICE_COORD
+                {
+                    sols.push((path.clone(), sym as u8));
+                    break;
+                }
+            }
             return;
         }
 
