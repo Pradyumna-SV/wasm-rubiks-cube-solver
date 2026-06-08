@@ -1,17 +1,58 @@
+#![allow(dead_code)]
+
+#[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 use std::collections::VecDeque;
+#[cfg(not(target_arch = "wasm32"))]
 use std::env;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = Date, js_name = now)]
+    fn date_now() -> f64;
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Instant(u64);
+
+#[cfg(target_arch = "wasm32")]
+impl Instant {
+    pub fn now() -> Self {
+        Self(date_now() as u64)
+    }
+    pub fn elapsed(&self) -> Duration {
+        let now = date_now() as u64;
+        let diff = now.saturating_sub(self.0);
+        Duration::from_millis(diff)
+    }
+}
 
 // ---------- Constants ----------
 
+#[cfg(not(target_arch = "wasm32"))]
 const BENCHMARK_SOLVES: usize = 100;
+#[cfg(not(target_arch = "wasm32"))]
 const BENCHMARK_SCRAMBLE_LEN: usize = 3;
+#[cfg(not(target_arch = "wasm32"))]
 const BENCHMARK_SEED: u64 = 0xC0FFEE;
+#[cfg(not(target_arch = "wasm32"))]
 const BENCHMARK_SOLVE_TIMEOUT_MS: u64 = 500;
+#[cfg(not(target_arch = "wasm32"))]
 const COMPETITION_SOLVES: usize = 100;
+#[cfg(not(target_arch = "wasm32"))]
 const COMPETITION_SCRAMBLE_LEN: usize = 25;
+#[cfg(not(target_arch = "wasm32"))]
 const COMPETITION_SEED: u64 = 0xFACEFEED;
+#[cfg(not(target_arch = "wasm32"))]
 const COMPETITION_SOLVE_TIMEOUT_MS: u64 = 13_116;
 const PHASE1_EXTRA_OPTIMIZATION_DEPTH: usize = 1;
 
@@ -62,6 +103,37 @@ pub enum Move {
     F, F2, F3, B, B2, B3,
     L, L2, L3, R, R2, R3,
 }
+
+impl Move {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Move::U => "U", Move::U2 => "U2", Move::U3 => "U'",
+            Move::D => "D", Move::D2 => "D2", Move::D3 => "D'",
+            Move::F => "F", Move::F2 => "F2", Move::F3 => "F'",
+            Move::B => "B", Move::B2 => "B2", Move::B3 => "B'",
+            Move::L => "L", Move::L2 => "L2", Move::L3 => "L'",
+            Move::R => "R", Move::R2 => "R2", Move::R3 => "R'",
+        }
+    }
+}
+
+impl std::str::FromStr for Move {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "U" | "U1" => Ok(Move::U), "U2" => Ok(Move::U2), "U'" | "U3" | "Ui" => Ok(Move::U3),
+            "D" | "D1" => Ok(Move::D), "D2" => Ok(Move::D2), "D'" | "D3" | "Di" => Ok(Move::D3),
+            "F" | "F1" => Ok(Move::F), "F2" => Ok(Move::F2), "F'" | "F3" | "Fi" => Ok(Move::F3),
+            "B" | "B1" => Ok(Move::B), "B2" => Ok(Move::B2), "B'" | "B3" | "Bi" => Ok(Move::B3),
+            "L" | "L1" => Ok(Move::L), "L2" => Ok(Move::L2), "L'" | "L3" | "Li" => Ok(Move::L3),
+            "R" | "R1" => Ok(Move::R), "R2" => Ok(Move::R2), "R'" | "R3" | "Ri" => Ok(Move::R3),
+            _ => Err(()),
+        }
+    }
+}
+
+
 
 const PHASE1_MOVES: [Move; PHASE1_MOVE_COUNT] = [
     Move::U, Move::U2, Move::U3, Move::D, Move::D2, Move::D3,
@@ -796,13 +868,53 @@ impl DominoSolver {
         solver
     }
 
+    pub fn new_from_bytes(data: &[u8]) -> Self {
+        let mut solver = Self {
+            phase1_eo_slice_prune:  vec![PRUNE_UNKNOWN; EDGE_ORIENTATION_COUNT * SLICE_COMBINATION_COUNT],
+            phase1_co_slice_prune:  vec![PRUNE_UNKNOWN; CORNER_ORIENTATION_COUNT * SLICE_COMBINATION_COUNT],
+            phase2_ud_slice_ep_prune: vec![PRUNE_UNKNOWN; PHASE2_UD_SLICE_EP_SIZE],
+            phase2_cp_sep_prune:      vec![PRUNE_UNKNOWN; PHASE2_CP_SEP_SIZE],
+            eo_move:    vec![[0u16; PHASE1_MOVE_COUNT]; EDGE_ORIENTATION_COUNT],
+            co_move:    vec![[0u16; PHASE1_MOVE_COUNT]; CORNER_ORIENTATION_COUNT],
+            slice_move: vec![[0u16; PHASE1_MOVE_COUNT]; SLICE_COMBINATION_COUNT],
+            cp_move:       vec![[0u32; PHASE2_MOVE_COUNT]; CORNER_PERMUTATION_COUNT],
+            ud_edge_move:  vec![[0u32; PHASE2_MOVE_COUNT]; UD_EDGE_PERMUTATION_COUNT],
+            slice_ep_move: vec![[0u8;  PHASE2_MOVE_COUNT]; SLICE_EDGE_PERMUTATION_COUNT],
+            syms: [CubeState::new(); 8],
+            syms_inv: [CubeState::new(); 8],
+            eo_sym: Vec::new(),
+            co_sym: Vec::new(),
+            slice_sym: Vec::new(),
+            sym_move_conj: Vec::new(),
+            allowed_next_moves_p1: [AllowedMovesP1 { moves: [0; 18], len: 0 }; 19],
+            allowed_next_moves_p2: [AllowedMovesP2 { moves: [0; 10], len: 0 }; 11],
+        };
+
+        if !solver.load_from_bytes(data) {
+            panic!("Embedded cache load failed! Check TABLE_MAGIC and sizes.");
+        }
+
+        let syms = get_symmetry_rotations();
+        let syms_inv = [
+            syms[0].inverse(), syms[1].inverse(), syms[2].inverse(), syms[3].inverse(),
+            syms[4].inverse(), syms[5].inverse(), syms[6].inverse(), syms[7].inverse(),
+        ];
+        solver.eo_sym = build_eo_sym_table(&syms);
+        solver.co_sym = build_co_sym_table(&syms);
+        solver.slice_sym = build_slice_sym_table(&syms);
+        solver.sym_move_conj = build_sym_move_conj_table(&syms);
+        solver.syms = syms;
+        solver.syms_inv = syms_inv;
+
+        solver.allowed_next_moves_p1 = build_allowed_next_moves_p1();
+        solver.allowed_next_moves_p2 = build_allowed_next_moves_p2();
+
+        solver
+    }
+
     // ---- Disk cache load/save ----
 
-    fn try_load_tables_from_disk(&mut self) -> bool {
-        let data = match std::fs::read(TABLE_CACHE_PATH) {
-            Ok(d) => d,
-            Err(_) => return false,
-        };
+    pub fn load_from_bytes(&mut self, data: &[u8]) -> bool {
         let prune_sz = EDGE_ORIENTATION_COUNT * SLICE_COMBINATION_COUNT
             + CORNER_ORIENTATION_COUNT * SLICE_COMBINATION_COUNT
             + PHASE2_UD_SLICE_EP_SIZE
@@ -834,11 +946,11 @@ impl DominoSolver {
         off += PHASE2_CP_SEP_SIZE;
 
         // Move tables
-        self.eo_move    = read_u16_table::<PHASE1_MOVE_COUNT>(&data, &mut off, EDGE_ORIENTATION_COUNT);
-        self.co_move    = read_u16_table::<PHASE1_MOVE_COUNT>(&data, &mut off, CORNER_ORIENTATION_COUNT);
-        self.slice_move = read_u16_table::<PHASE1_MOVE_COUNT>(&data, &mut off, SLICE_COMBINATION_COUNT);
-        self.cp_move      = read_u32_table::<PHASE2_MOVE_COUNT>(&data, &mut off, CORNER_PERMUTATION_COUNT);
-        self.ud_edge_move = read_u32_table::<PHASE2_MOVE_COUNT>(&data, &mut off, UD_EDGE_PERMUTATION_COUNT);
+        self.eo_move    = read_u16_table::<PHASE1_MOVE_COUNT>(data, &mut off, EDGE_ORIENTATION_COUNT);
+        self.co_move    = read_u16_table::<PHASE1_MOVE_COUNT>(data, &mut off, CORNER_ORIENTATION_COUNT);
+        self.slice_move = read_u16_table::<PHASE1_MOVE_COUNT>(data, &mut off, SLICE_COMBINATION_COUNT);
+        self.cp_move      = read_u32_table::<PHASE2_MOVE_COUNT>(data, &mut off, CORNER_PERMUTATION_COUNT);
+        self.ud_edge_move = read_u32_table::<PHASE2_MOVE_COUNT>(data, &mut off, UD_EDGE_PERMUTATION_COUNT);
         for row in &mut self.slice_ep_move {
             row.copy_from_slice(&data[off..off + PHASE2_MOVE_COUNT]);
             off += PHASE2_MOVE_COUNT;
@@ -846,6 +958,14 @@ impl DominoSolver {
         let _ = off; // last increment is intentionally dead
 
         true
+    }
+
+    fn try_load_tables_from_disk(&mut self) -> bool {
+        if let Ok(data) = std::fs::read(TABLE_CACHE_PATH) {
+            self.load_from_bytes(&data)
+        } else {
+            false
+        }
     }
 
     fn save_tables_to_disk(&self) -> std::io::Result<()> {
@@ -1077,6 +1197,86 @@ impl DominoSolver {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct WasmSolver {
+    solver: DominoSolver,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl WasmSolver {
+    /// Create a new solver instance by loading precomputed pruning tables from the provided byte slice.
+    #[wasm_bindgen(constructor)]
+    pub fn new_with_bytes(data: &[u8]) -> Result<WasmSolver, String> {
+        let mut solver = DominoSolver {
+            phase1_eo_slice_prune:  vec![PRUNE_UNKNOWN; EDGE_ORIENTATION_COUNT * SLICE_COMBINATION_COUNT],
+            phase1_co_slice_prune:  vec![PRUNE_UNKNOWN; CORNER_ORIENTATION_COUNT * SLICE_COMBINATION_COUNT],
+            phase2_ud_slice_ep_prune: vec![PRUNE_UNKNOWN; PHASE2_UD_SLICE_EP_SIZE],
+            phase2_cp_sep_prune:      vec![PRUNE_UNKNOWN; PHASE2_CP_SEP_SIZE],
+            eo_move:    vec![[0u16; PHASE1_MOVE_COUNT]; EDGE_ORIENTATION_COUNT],
+            co_move:    vec![[0u16; PHASE1_MOVE_COUNT]; CORNER_ORIENTATION_COUNT],
+            slice_move: vec![[0u16; PHASE1_MOVE_COUNT]; SLICE_COMBINATION_COUNT],
+            cp_move:       vec![[0u32; PHASE2_MOVE_COUNT]; CORNER_PERMUTATION_COUNT],
+            ud_edge_move:  vec![[0u32; PHASE2_MOVE_COUNT]; UD_EDGE_PERMUTATION_COUNT],
+            slice_ep_move: vec![[0u8;  PHASE2_MOVE_COUNT]; SLICE_EDGE_PERMUTATION_COUNT],
+            syms: [CubeState::new(); 8],
+            syms_inv: [CubeState::new(); 8],
+            eo_sym: Vec::new(),
+            co_sym: Vec::new(),
+            slice_sym: Vec::new(),
+            sym_move_conj: Vec::new(),
+            allowed_next_moves_p1: [AllowedMovesP1 { moves: [0; 18], len: 0 }; 19],
+            allowed_next_moves_p2: [AllowedMovesP2 { moves: [0; 10], len: 0 }; 11],
+        };
+
+        if !solver.load_from_bytes(data) {
+            return Err("Failed to load tables from bytes: signature/size mismatch or invalid content".to_string());
+        }
+
+        let syms = get_symmetry_rotations();
+        let syms_inv = [
+            syms[0].inverse(), syms[1].inverse(), syms[2].inverse(), syms[3].inverse(),
+            syms[4].inverse(), syms[5].inverse(), syms[6].inverse(), syms[7].inverse(),
+        ];
+        solver.eo_sym = build_eo_sym_table(&syms);
+        solver.co_sym = build_co_sym_table(&syms);
+        solver.slice_sym = build_slice_sym_table(&syms);
+        solver.sym_move_conj = build_sym_move_conj_table(&syms);
+        solver.syms = syms;
+        solver.syms_inv = syms_inv;
+
+        solver.allowed_next_moves_p1 = build_allowed_next_moves_p1();
+        solver.allowed_next_moves_p2 = build_allowed_next_moves_p2();
+
+        Ok(WasmSolver { solver })
+    }
+
+    /// Create a new solver instance with embedded tables (compiled into the WASM binary).
+    pub fn new_embedded() -> Result<WasmSolver, String> {
+        let data = include_bytes!("../pruning_tables.bin");
+        Self::new_with_bytes(data)
+    }
+
+    /// Solve a scramble given as a space-separated string (e.g. "R U R' F2").
+    /// Returns the space-separated solution moves, or None/null if no solution is found or the scramble is invalid.
+    pub fn solve(&self, scramble: &str) -> Option<String> {
+        let mut cube = CubeState::new();
+        for word in scramble.split_whitespace() {
+            if let Ok(m) = word.parse::<Move>() {
+                cube.apply_move(m);
+            } else {
+                return None;
+            }
+        }
+
+        let solution = self.solver.solve(&cube)?;
+        let move_strs: Vec<&str> = solution.iter().map(|&m| m.to_str()).collect();
+        Some(move_strs.join(" "))
+    }
+}
+
+
 // ---------- 6. Table I/O helpers ----------
 
 fn write_u16_table<const N: usize>(buf: &mut Vec<u8>, t: &[[u16; N]]) {
@@ -1292,12 +1492,14 @@ const BASE_MOVES: [CubeState; 6] = [
 
 // ---------- 10. Stats, RNG, Scaffolding ----------
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 struct BenchmarkStats {
     solves: usize, failures: usize, timeouts: usize,
     min_moves: usize, max_moves: usize, total_moves: usize,
     min_time: Duration, max_time: Duration, total_time: Duration,
 }
+#[cfg(not(target_arch = "wasm32"))]
 impl BenchmarkStats {
     fn new() -> Self {
         Self { solves:0, failures:0, timeouts:0,
@@ -1317,7 +1519,9 @@ impl BenchmarkStats {
     fn avg_time(&self) -> Duration { Duration::from_secs_f64(self.total_time.as_secs_f64() / self.solves as f64) }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct SimpleRng { state: u64 }
+#[cfg(not(target_arch = "wasm32"))]
 impl SimpleRng {
     fn new(seed: u64) -> Self { Self { state: seed } }
     fn next_u64(&mut self) -> u64 {
@@ -1327,6 +1531,7 @@ impl SimpleRng {
     fn next_index(&mut self, len: usize) -> usize { (self.next_u64() as usize) % len }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let mode = env::args().nth(1);
     println!("Initializing Solver and Tables...");
@@ -1347,6 +1552,7 @@ fn main() {
         BENCHMARK_SOLVES, BENCHMARK_SCRAMBLE_LEN, BENCHMARK_SEED, BENCHMARK_SOLVE_TIMEOUT_MS);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run_profiled_scramble(label: &str, solver: &DominoSolver, scramble: &[Move]) {
     let mut cube = CubeState::new();
     for &m in scramble { cube.apply_move(m); }
@@ -1371,6 +1577,7 @@ fn run_profiled_scramble(label: &str, solver: &DominoSolver, scramble: &[Move]) 
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run_benchmark(label: &str, solver: &DominoSolver,
     solves: usize, scramble_len: usize, seed: u64, timeout_ms: u64)
 {
@@ -1425,6 +1632,7 @@ fn run_benchmark(label: &str, solver: &DominoSolver,
     if stats.timeouts > 0 { println!("Timeouts: {}.", stats.timeouts); }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn random_scramble(rng: &mut SimpleRng, len: usize) -> Vec<Move> {
     let mut s = Vec::with_capacity(len);
     while s.len() < len {
@@ -1433,5 +1641,10 @@ fn random_scramble(rng: &mut SimpleRng, len: usize) -> Vec<Move> {
     }
     s
 }
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+
 
 
