@@ -1,4 +1,4 @@
-use rubiks_cube::{CubeState, DominoSolver, Move, PHASE1_MOVES, SolveStats};
+use wasm_rubiks_solver::{CubeState, DominoSolver, Move, PHASE1_MOVES, SolveStats};
 use rayon::prelude::*;
 use std::env;
 use std::time::{Duration, Instant};

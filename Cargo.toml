@@ -1,5 +1,5 @@
 [package]
-name = "rubiks_cube"
+name = "wasm-rubiks-solver"
 version = "0.1.0"
 edition = "2021"
 description = "A hyper-fast, symmetry-reduced 2-Phase Rubik's Cube Solver in Rust, optimized for both native and WebAssembly."
