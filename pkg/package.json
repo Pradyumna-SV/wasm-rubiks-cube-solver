@@ -1,0 +1,17 @@
+{
+  "name": "wasm-rubiks-solver",
+  "type": "module",
+  "description": "A hyper-fast, symmetry-reduced 2-Phase Rubik's Cube Solver in Rust, optimized for both native and WebAssembly.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "wasm_rubiks_solver_bg.wasm",
+    "wasm_rubiks_solver.js",
+    "wasm_rubiks_solver.d.ts"
+  ],
+  "main": "wasm_rubiks_solver.js",
+  "types": "wasm_rubiks_solver.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
