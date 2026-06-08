@@ -603,6 +603,70 @@ fn build_slice_sym_table(syms: &[CubeState; 8]) -> Vec<[u16; 8]> {
 
 // ---------- 5. Solver ----------
 
+#[derive(Clone, Copy)]
+struct AllowedMovesP1 {
+    moves: [u8; 18],
+    len: usize,
+}
+
+#[derive(Clone, Copy)]
+struct AllowedMovesP2 {
+    moves: [u8; 10],
+    len: usize,
+}
+
+fn build_allowed_next_moves_p1() -> [AllowedMovesP1; 19] {
+    let mut table = [AllowedMovesP1 { moves: [0; 18], len: 0 }; 19];
+    for last_move in 0..=18 {
+        let mut allowed = Vec::new();
+        for (next_move, &nf) in PHASE1_MOVE_FACES.iter().enumerate() {
+            let mut redundant = false;
+            if last_move < 18 {
+                let lf = PHASE1_MOVE_FACES[last_move] as usize;
+                let nf = nf as usize;
+                if lf == nf || (lf / 2 == nf / 2 && lf > nf) {
+                    redundant = true;
+                }
+            }
+            if !redundant {
+                allowed.push(next_move as u8);
+            }
+        }
+        let mut moves = [0u8; 18];
+        for (i, &m) in allowed.iter().enumerate() {
+            moves[i] = m;
+        }
+        table[last_move] = AllowedMovesP1 { moves, len: allowed.len() };
+    }
+    table
+}
+
+fn build_allowed_next_moves_p2() -> [AllowedMovesP2; 11] {
+    let mut table = [AllowedMovesP2 { moves: [0; 10], len: 0 }; 11];
+    for last_move in 0..=10 {
+        let mut allowed = Vec::new();
+        for (next_move, &nf) in PHASE2_MOVE_FACES.iter().enumerate() {
+            let mut redundant = false;
+            if last_move < 10 {
+                let lf = PHASE2_MOVE_FACES[last_move] as usize;
+                let nf = nf as usize;
+                if lf == nf || (lf / 2 == nf / 2 && lf > nf) {
+                    redundant = true;
+                }
+            }
+            if !redundant {
+                allowed.push(next_move as u8);
+            }
+        }
+        let mut moves = [0u8; 10];
+        for (i, &m) in allowed.iter().enumerate() {
+            moves[i] = m;
+        }
+        table[last_move] = AllowedMovesP2 { moves, len: allowed.len() };
+    }
+    table
+}
+
 pub struct DominoSolver {
     // Pruning tables (heuristics)
     phase1_eo_slice_prune:  Vec<u8>,
@@ -626,7 +690,12 @@ pub struct DominoSolver {
     co_sym: Vec<[u16; 8]>,
     slice_sym: Vec<[u16; 8]>,
     sym_move_conj: Vec<[u8; 18]>,
+
+    // Precomputed allowed moves
+    allowed_next_moves_p1: [AllowedMovesP1; 19],
+    allowed_next_moves_p2: [AllowedMovesP2; 11],
 }
+
 
 
 #[derive(Debug, Default)]
@@ -671,6 +740,8 @@ impl DominoSolver {
             co_sym: Vec::new(),
             slice_sym: Vec::new(),
             sym_move_conj: Vec::new(),
+            allowed_next_moves_p1: [AllowedMovesP1 { moves: [0; 18], len: 0 }; 19],
+            allowed_next_moves_p2: [AllowedMovesP2 { moves: [0; 10], len: 0 }; 11],
         };
 
         if solver.try_load_tables_from_disk() {
@@ -718,6 +789,9 @@ impl DominoSolver {
         solver.sym_move_conj = build_sym_move_conj_table(&syms);
         solver.syms = syms;
         solver.syms_inv = syms_inv;
+
+        solver.allowed_next_moves_p1 = build_allowed_next_moves_p1();
+        solver.allowed_next_moves_p2 = build_allowed_next_moves_p2();
 
         solver
     }
@@ -853,6 +927,7 @@ impl DominoSolver {
             self.search_phase1(
                 init_eo, init_co, init_slice, depth, 0,
                 &mut Vec::new(), &mut p1_sols, &mut stats, t0, limit,
+                18, // no last move
             );
             if stats.timed_out { break; }
             if p1_sols.is_empty() { continue; }
@@ -922,6 +997,7 @@ impl DominoSolver {
         max_d: usize, d: usize,
         path: &mut Vec<usize>, sols: &mut Vec<(Vec<usize>, u8)>,
         stats: &mut SolveStats, t0: Instant, limit: Option<Duration>,
+        last_move: usize,
     ) {
         stats.phase1_nodes += 1;
         if should_stop_search(stats, t0, limit) { return; }
@@ -942,14 +1018,15 @@ impl DominoSolver {
         let h = self.phase1_heuristic(eo, co, slice);
         if d + h > max_d { stats.phase1_pruned += 1; return; }
 
-        for mi in 0..PHASE1_MOVE_COUNT {
+        let allowed = &self.allowed_next_moves_p1[last_move];
+        for &mi in &allowed.moves[..allowed.len] {
+            let mi = mi as usize;
             if stats.timed_out { return; }
-            if is_redundant_p1(path, mi) { continue; }
             let neo   = self.eo_move[eo as usize][mi];
             let nco   = self.co_move[co as usize][mi];
             let nsl   = self.slice_move[slice as usize][mi];
             path.push(mi);
-            self.search_phase1(neo, nco, nsl, max_d, d + 1, path, sols, stats, t0, limit);
+            self.search_phase1(neo, nco, nsl, max_d, d + 1, path, sols, stats, t0, limit, mi);
             path.pop();
         }
     }
@@ -965,7 +1042,7 @@ impl DominoSolver {
         for depth in 0..=max_d {
             if stats.timed_out { return None; }
             let mut path = Vec::new();
-            if self.do_phase2(cp, ud, sep, depth, 0, &mut path, stats, t0, limit) {
+            if self.do_phase2(cp, ud, sep, depth, 0, &mut path, stats, t0, limit, 10) {
                 return Some(path);
             }
         }
@@ -977,6 +1054,7 @@ impl DominoSolver {
         &self, cp: u32, ud: u32, sep: u8,
         max_d: usize, d: usize,
         path: &mut Vec<usize>, stats: &mut SolveStats, t0: Instant, limit: Option<Duration>,
+        last_move: usize,
     ) -> bool {
         stats.phase2_nodes += 1;
         if should_stop_search(stats, t0, limit) { return false; }
@@ -984,14 +1062,15 @@ impl DominoSolver {
         if d + h > max_d { return false; }
         if d == max_d { return cp == 0 && ud == 0 && sep == 0; }
 
-        for mi in 0..PHASE2_MOVE_COUNT {
+        let allowed = &self.allowed_next_moves_p2[last_move];
+        for &mi in &allowed.moves[..allowed.len] {
+            let mi = mi as usize;
             if stats.timed_out { return false; }
-            if is_redundant_p2(path, mi) { continue; }
             let ncp  = self.cp_move[cp as usize][mi];
             let nud  = self.ud_edge_move[ud as usize][mi];
             let nsep = self.slice_ep_move[sep as usize][mi];
             path.push(mi);
-            if self.do_phase2(ncp, nud, nsep, max_d, d + 1, path, stats, t0, limit) { return true; }
+            if self.do_phase2(ncp, nud, nsep, max_d, d + 1, path, stats, t0, limit, mi) { return true; }
             path.pop();
         }
         false
@@ -1129,28 +1208,6 @@ fn binomial(n: usize, k: usize) -> usize {
     r
 }
 
-/// Phase-1 move-index redundancy: same face, or opposite-face in non-canonical order.
-/// Canonical: lower face index first (U<D, F<B, L<R) — eliminates commuting-pair duplicates.
-fn is_redundant_p1(path: &[usize], next: usize) -> bool {
-    if let Some(&last) = path.last() {
-        let lf = PHASE1_MOVE_FACES[last] as usize;
-        let nf = PHASE1_MOVE_FACES[next] as usize;
-        if lf == nf { return true; }                       // same face
-        if lf / 2 == nf / 2 && lf > nf { return true; }  // opposite, non-canonical
-    }
-    false
-}
-
-/// Phase-2 move-index redundancy (same rules, different face table).
-fn is_redundant_p2(path: &[usize], next: usize) -> bool {
-    if let Some(&last) = path.last() {
-        let lf = PHASE2_MOVE_FACES[last] as usize;
-        let nf = PHASE2_MOVE_FACES[next] as usize;
-        if lf == nf { return true; }
-        if lf / 2 == nf / 2 && lf > nf { return true; }
-    }
-    false
-}
 
 /// Legacy same-face check used only for scramble generation.
 fn is_redundant(path: &[Move], next: Move) -> bool {
