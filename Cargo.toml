@@ -2,9 +2,11 @@
 name = "rubiks_cube"
 version = "0.1.0"
 edition = "2021"
+description = "A hyper-fast, symmetry-reduced 2-Phase Rubik's Cube Solver in Rust, optimized for both native and WebAssembly."
+license = "MIT"
 
 [lib]
-path = "src/main.rs"
+path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
