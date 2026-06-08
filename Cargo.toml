@@ -1,0 +1,16 @@
+[package]
+name = "rubiks_cube"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "solver"
+path = "src/main.rs"
+
+[dependencies]
+rayon = "1"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
